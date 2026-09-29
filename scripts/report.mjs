@@ -127,6 +127,7 @@ export function buildReport({ sitting, history, wordlist }) {
       theta: fitFirst.theta,
       a: fitFirst.a,
       aFixed: fitFirst.aFixed,
+      shapeUncertain: fitFirst.shapeUncertain,
       atBound: fitFirst.atBound,
       nItems: fitFirst.nItems,
       nCorrect: fitFirst.nCorrect,
@@ -171,6 +172,7 @@ export function textSummary(rep) {
     : `【track 窄带追踪】词汇量约 ${h.vocab} 词（95% 区间 ${h.ci95[0]}–${h.ci95[1]}）`);
 
   if (h.atBound) L.push('⚠ 这次撞到了词表边界（几乎全对或全错），数字不可信，建议调整难度重测。');
+  if (h.shapeUncertain) L.push('⚠ 你的作答曲线太扁，陡峭度 a 这次钉不死：总量是好几条可能曲线的加权平均，区间也相应加宽了。曲线扁 = 词汇分布不均匀（常见词里有不熟的、偏门词里有熟的），不是测失败了。');
   if (rep.thinSample) L.push(`⚠ 首考词只有 ${h.nFirstExposure} 个（其余是复现词），总量估算偏粗。`);
 
   L.push(`陡峭度 a = ${h.a}${h.aFixed ? '（沿用上次 level 的测量值）' : '（本次拟合）'}。a 越大会的越干脆，a 小则半生不熟的词多。`);

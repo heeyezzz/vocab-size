@@ -31,7 +31,7 @@ const N_GRID = Math.round((THETA_HI - THETA_LO) / THETA_STEP) + 1;
 const thetaAt = i => THETA_LO + i * THETA_STEP;
 
 const A_GRID = [];
-for (let a = 1.0; a <= 9.0; a += 0.5) A_GRID.push(Math.round(a * 10) / 10);
+for (let a = 0.5; a <= 9.0; a += 0.5) A_GRID.push(Math.round(a * 10) / 10);
 
 export const DEFAULT_A = 4.0;
 export const THETA_BOUNDS = { lo: THETA_LO, hi: THETA_HI };
@@ -126,71 +126,67 @@ function seOf(theta, a, items) {
  * @param {object} [opts]
  * @param {number} [opts.fixA]        钉死 a（track 模式用）；不给则在 A_GRID 上搜
  * @param {number} [opts.priorTheta]  起始值（自适应测试中途重估时用，能加速收敛）
- * @returns {null|{theta,a,aFixed,aProfiled,ll,seTheta,seVocab,vocab,ci95,nItems,atBound}}
+ * @returns {null|{theta,a,aFixed,ll,seVocab,vocab,ci95,shapeUncertain,nItems,nCorrect,atBound}}
  */
 export function fit(items, opts = {}) {
   const usable = items.filter(it => it && Number.isFinite(it.rank) && it.rank >= 1 && it.rank <= N_RANK);
   if (usable.length === 0) return null;
   const y = usable.map(it => (it.correct ? 1 : 0));
+  const nCorrect = y.reduce((s, v) => s + v, 0);
 
-  let theta, a, aFixed = false, ll;
+  let theta, a, ll, ci95, seVocab, vocab, shapeUncertain = false;
+  const aFixed = opts.fixA !== undefined;
 
-  if (opts.fixA !== undefined) {
+  if (aFixed) {
     a = opts.fixA;
-    aFixed = true;
     theta = mleTheta(a, usable, opts.priorTheta);
     ll = logLik(theta, a, usable);
+    const { seTheta, seVocab: se } = seOf(theta, a, usable);
+    seVocab = se;
+    vocab = vocabOf(theta, a);
+    ci95 = [
+      Math.max(0, Math.round(vocabOf(theta - 1.96 * seTheta, a))),
+      Math.min(N_RANK, Math.round(vocabOf(theta + 1.96 * seTheta, a))),
+    ];
   } else {
-    let best = null;
-    for (const cand of A_GRID) {
+    // a 经常认不出来（作答曲线平时，似然沿 a 是一条脊）。
+    // "取网格最大似然"会被网格边界绑架（下界改一改总量就跳几百词），所以：
+    // 点估计 = 轮廓似然加权的模型平均；区间 = 似然比集合(Δll≤1.92)内各 a 的渐近区间之并。
+    const prof = A_GRID.map(cand => {
       const t = mleTheta(cand, usable, opts.priorTheta);
-      const l = logLik(t, cand, usable);
-      if (!best || l > best.ll) best = { ll: l, theta: t, a: cand };
+      return { a: cand, theta: t, ll: logLik(t, cand, usable), v: vocabOf(t, cand) };
+    });
+    const llmax = Math.max(...prof.map(p => p.ll));
+    const ws = prof.map(p => Math.exp(p.ll - llmax));
+    const wsum = ws.reduce((s, w) => s + w, 0);
+    a = round(prof.reduce((s, p, i) => s + ws[i] * p.a, 0) / wsum, 2);
+    theta = prof.reduce((s, p, i) => s + ws[i] * p.theta, 0) / wsum;
+    vocab = prof.reduce((s, p, i) => s + ws[i] * p.v, 0) / wsum;
+    ll = llmax;
+    const S = prof.filter(p => p.ll >= llmax - 1.92);
+    shapeUncertain = S.length > 1
+      && (S[0].a === A_GRID[0] || S[S.length - 1].a === A_GRID[A_GRID.length - 1]);
+    let lo = Infinity, hi = -Infinity;
+    for (const p of S) {
+      const { seTheta: se } = seOf(p.theta, p.a, usable);
+      lo = Math.min(lo, vocabOf(p.theta - 1.96 * se, p.a));
+      hi = Math.max(hi, vocabOf(p.theta + 1.96 * se, p.a));
     }
-    ({ ll, theta, a } = best);
+    ci95 = [Math.max(0, Math.round(lo)), Math.min(N_RANK, Math.round(hi))];
+    seVocab = (ci95[1] - ci95[0]) / 3.92;
   }
-
-  // a 是搜出来的，而 A_GRID 是 0.5 的粗格；用抛物线插值把峰值磨细一点。
-  // 只在 a 落在网格内部（不是边界）时才做，边界处插值没有意义。
-  let aProfiled = a;
-  if (!aFixed) {
-    const i = A_GRID.indexOf(a);
-    if (i > 0 && i < A_GRID.length - 1) {
-      const l0 = logLik(mleTheta(A_GRID[i - 1], usable), A_GRID[i - 1], usable);
-      const l2 = logLik(mleTheta(A_GRID[i + 1], usable), A_GRID[i + 1], usable);
-      const denom = l0 - 2 * ll + l2;
-      if (denom < -1e-9) {
-        const off = 0.5 * (l0 - l2) / denom;           // 顶点偏移，单位=格距
-        if (Math.abs(off) <= 1) {
-          const cand = Math.round((a + off * 0.5) * 100) / 100;
-          const candTheta = mleTheta(cand, usable);
-          const candLl = logLik(candTheta, cand, usable);
-          // 磨细只有在似然确实更高时才采纳，否则退回网格解
-          if (candLl > ll) { aProfiled = cand; theta = candTheta; ll = candLl; }
-        }
-      }
-    }
-  }
-
-  const nCorrect = y.reduce((s, v) => s + v, 0);
-  const { seTheta, seVocab } = seOf(theta, aProfiled, usable);
-  const vocab = vocabOf(theta, aProfiled);
 
   return {
     nItems: usable.length,
     nCorrect,
     theta: round(theta, 4),
-    a: aProfiled,
-    aGrid: a,
+    a,
     aFixed,
     ll: round(ll, 3),
-    seTheta: round(seTheta, 4),
     seVocab: Math.round(seVocab),
     vocab: Math.round(vocab),
-    ci95: [
-      Math.max(0, Math.round(vocabOf(theta - 1.96 * seTheta, aProfiled))),
-      Math.min(N_RANK, Math.round(vocabOf(theta + 1.96 * seTheta, aProfiled))),
-    ],
+    ci95,
+    shapeUncertain,
     // 撞上词表边界 = 题目太简单/太难，这次测不准，报告里要如实说明
     atBound: theta <= THETA_LO + 1e-6 || theta >= THETA_HI - 1e-6
       || nCorrect === 0 || nCorrect === usable.length,
@@ -212,7 +208,7 @@ async function selftest() {
   let bad = 0;
   console.log(`每组 ${REPS} 次重复。level 模式：160 题均匀铺满全表，a 由作答拟合。`);
   console.log('真实a  真实词汇量 │ 词汇量偏差中位数   95%CI覆盖率   a估计中位数   a误差中位数');
-  for (const trueA of [2.5, 4.0, 6.0]) {
+  for (const trueA of [1.0, 2.5, 4.0, 6.0]) {
     for (const trueV of [3000, 5000, 8000, 12000]) {
       const trueTheta = thetaOf(trueV, trueA);
       const errs = [], aErrs = [], aEsts = [];

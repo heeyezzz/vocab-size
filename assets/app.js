@@ -151,7 +151,8 @@ function renderResult(rep) {
   if (rep.scale?.saturated) parts.push(`<div class="warn">这个词表只收了频率前 ${rep.scale.max.toLocaleString('en-US')} 个词。母语成人一般在 2 万–3.5 万，<b>已经超出量程</b>，所以越靠近顶部读数越被压扁、越不准。你现在处在量程上端，这个数字应当看作"至少这么多"。</div>`);
   if (h.atBound) parts.push(`<div class="warn">这次几乎全对或全错，估计撞到了词表的边界，<b>这个数字不可信</b>。题目难度和你的水平差得太远，换个模式重测。</div>`);
   if (rep.thinSample) parts.push(`<div class="warn">总量只用首考词算，这次首考词只有 ${h.nFirstExposure} 个（其余 ${h.nRepeated} 个是复现词）。样本偏薄，区间比显示的更宽。</div>`);
-  parts.push(`<div class="warn" style="background:var(--accent-soft);border-color:var(--accent-line);color:#4E4267">陡峭度 a = ${h.a}${h.aFixed ? '（沿用上次 level 的测量值）' : '（本次拟合）'}。a 越大表示"会的就会、不会的就不会"，a 小说明半生不熟的词多。你的 a 会影响所有精度数字，第一次测完之后它就固定下来了。</div>`);
+  if (h.shapeUncertain) parts.push(`<div class="warn">你的作答曲线太扁，陡峭度 a 这次钉不死：总量是好几条可能曲线的加权平均，区间也相应加宽。曲线扁不是测失败 —— 它说明你的词汇分布不均匀：常见词里有不熟的，偏门词里有熟的。</div>`);
+  parts.push(`<div class="warn" style="background:var(--accent-soft);border-color:var(--accent-line);color:#4E4267">陡峭度 a = ${h.a}${h.aFixed ? '（沿用上次 level 的测量值）' : h.shapeUncertain ? '（多条曲线的加权平均）' : '（本次拟合）'}。a 越大表示"会的就会、不会的就不会"，a 小说明半生不熟的词多。你的 a 会影响所有精度数字，第一次测完之后它就固定下来了。</div>`);
 
   if (rep.band) {
     const b = rep.band;
